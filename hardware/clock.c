@@ -73,11 +73,15 @@ static int Clock_Tick(struct isiInfo *info, struct timespec crun)
 	struct Clock_rvstate *clk = (struct Clock_rvstate*)info->rvstate;
 	if(!clk->rate) return 0;
 	if(!isi_time_lt(&info->nrun, &crun)) return 0;
+	uint16_t iom[3];
 	if(!(clk->raccum++ < clk->rate)) { /* handle divided rate */
 		clk->raccum = 0;
 		clk->ctime++;
-		if(clk->iword && info->hostcpu && info->hostcpu->c->MsgIn) {
-			info->hostcpu->c->MsgIn(info->hostcpu, info, &clk->iword, 1, info->nrun);
+		if(clk->iword) {
+			iom[0] = ISE_XINT;
+			iom[1] = 0;
+			iom[2] = clk->iword;
+			isi_message_dev(info, ISIAT_UP, iom, 3, info->nrun);
 		}
 	}
 	if(clk->accum++ < 15) { /* magically sync the 60Hz base clock to 1 second */
@@ -89,12 +93,12 @@ static int Clock_Tick(struct isiInfo *info, struct timespec crun)
 	return 0;
 }
 
-static int Clock_MsgIn(struct isiInfo *info, struct isiInfo *src, uint16_t *msg, int len, struct timespec mtime)
+static int Clock_MsgIn(struct isiInfo *info, struct isiInfo *src, int32_t lsindex, uint16_t *msg, int len, struct timespec mtime)
 {
 	switch(msg[0]) {
-	case 0: return 0;
-	case 1: return 0;
-	case 2:
+	case ISE_RESET: return 0;
+	case ISE_QINT: return 0;
+	case ISE_XINT:
 		if(len < 10) return -1;
 		return Clock_HWI(info, src, msg+2, len - 2, mtime);
 	default: break;

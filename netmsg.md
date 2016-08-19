@@ -42,8 +42,10 @@ length = (head      ) & 0x1fff    ;// ( 13 bits )
 | 0x024 |     4 |    4 |   C>S    | recursive activate and reset<br>`uint32 id`
 | 0x025 |     4 |    4 |   C>S    | recursive deactivate<br>`uint32 id`
 | 0x026 |    16 |   16 |   C>S    | attach with bus insert object B to A<br>`uint32 id_A`<br>`uint32 id_B`<br>`int32 at_A`<br>`int32 at_B`
+| 0x030 |     8 | 1300 | C>S, S>S | transacted create object<br>`uint32 txid`<br>`uint32 classid`<br>*parameter list*
 | 0x03A |    16 |   16 | C>S, S>S | transacted load object<br>`uint32 txid`<br>`uint32 classid`<br>`uint64 uuid`
 | 0x080 |     6 | 1300 |   Any    | send object message<br>`uint32 id`<br>`uint16 msg[ (len - 4) | 2 ]`
+| 0x081 |     6 | 1300 |   Any    | send channel message<br>`uint32 chanid`<br>`uint16 msg[ (len - 4) | 2 ]` | requires subscribed message exchange.
 | 0x0E0 |     6 | 1300 | S>C, S>S | sync memory a16<br>`uint32 id`<br>`{`<br>`uint16 baseindex`<br>`uint16 blocklen`<br>`uint8 data[blocklen]`<br>`} *`
 | 0x0E1 |     8 | 1300 | S>C, S>S | sync memory a32<br>`uint32 id`<br>`{`<br>`uint32 baseindex`<br>`uint16 blocklen`<br>`uint8 data[blocklen]`<br>`} *`
 | 0x0E2 |     4 | 1300 | S>C, S>S | sync run volitile state <br>`uint32 id`<br> `uint8 data[len - 4]`
@@ -56,9 +58,10 @@ length = (head      ) & 0x1fff    ;// ( 13 bits )
 | 0x314 |     0 | 1300 |   R>C    | last of list heirarchy<br>(same struct as response heirarchy) | sent at/with end of list
 | 0x220 |     8 |   12 | S>C, R>C | object created<br>`uint32 id`<br>`uint32 classid`<br>`int32 err (creating session only)`
 | 0x221 |     4 |    4 | S>C, R>C | object deleted<br>`uint32 id`
-| 0x222 |     8 |    8 |   R>C    | object attach<br>`uint32 id`<br>`int32 err`
+| 0x222 |    20 |   20 | S>C, R>C | object attach<br>`uint32 id_a`<br>`int32 err`<br>`uint32 id_b`<br>`int32 point_a`<br>`int32 point_b`
 | 0x224 |     4 |    8 | S>C, R>C | object heirarchy started or reset<br>`uint32 id`<br>`int32 err (initiating session only)`
 | 0x225 |     4 |    8 | S>C, R>C | object heirarchy stopped<br>`uint32 id`<br>`int32 err (initiating session only)`
+| 0x230 |    16 |   16 | R>C, R>S | transaction object created<br>`uint32 txid`<br>`uint32 id`<br>`uint32 classid`<br>`int32 err`
 | 0x23A |    24 |   24 | R>C, R>S | transaction object loaded<br>`uint32 txid`<br>`int32 err`<br>`uint32 id`<br>`uint32 classid`<br>`uint64 uuid` | if uuid is zero or not equal to the requested uuid<br>and id is non-zero,<br>then the object loaded is a copy of the requested object.
 
 ##### Transacted messages
@@ -93,9 +96,11 @@ length = (head      ) & 0x1fff    ;// ( 13 bits )
 ##### Attach Point Enums
  - values > 0 are normal bus attach points
  - values < 0 are special attach points
+ - Attaching a "memory" type device currently ignores destination attach point, the destination should be set to 0 (zero) and source to -1 to maintain possible future compatibility.
 
-|    Point   |   Value
-|:----------:|------------
-| AT_BUS_END |     -1
-|    DOWN    |     -2
+|     Point    |   Value
+|:------------:|------------
+|  AT_BUS_END  |     -1
+| AT_BUS_START |     -2
+|   UP_DEVICE  |     -3
 

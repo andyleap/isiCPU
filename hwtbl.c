@@ -4,6 +4,7 @@
 #include "dcpuhw.h"
 
 /* Hardware functions */
+void cemei_register();
 void DCPU_Register();
 void Memory_Register();
 void Disk_Register();
@@ -16,12 +17,14 @@ void EEROM_Register();
 void imva_Register();
 void speaker_Register();
 void GCA_Register();
+void KaiHIC_Register();
 
 void isi_register_objects()
 {
-	DCPU_Register();
 	Memory_Register();
+	cemei_register();
 	Disk_Register();
+	DCPU_Register();
 	DCPUBUS_Register();
 	Keyboard_Register();
 	Clock_Register();
@@ -31,5 +34,6 @@ void isi_register_objects()
 	imva_Register();
 	speaker_Register();
 	GCA_Register();
+	KaiHIC_Register();
 }
 

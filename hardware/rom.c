@@ -67,12 +67,12 @@ static int EEROM_HWI(struct isiInfo *info, struct isiInfo *src, uint16_t *msg, s
 	return 0;
 }
 
-static int EEROM_MsgIn(struct isiInfo *info, struct isiInfo *src, uint16_t *msg, int len, struct timespec mtime)
+static int EEROM_MsgIn(struct isiInfo *info, struct isiInfo *src, int32_t lsindex, uint16_t *msg, int len, struct timespec mtime)
 {
 	switch(msg[0]) {
-	case 0: return EEROM_Reset(info, src, mtime);
-	case 1: return EEROM_Query(info, src, msg+2, mtime);
-	case 2: return EEROM_HWI(info, src, msg+2, mtime);
+	case ISE_RESET: return EEROM_Reset(info, src, mtime);
+	case ISE_QINT: return EEROM_Query(info, src, msg+2, mtime);
+	case ISE_XINT: return EEROM_HWI(info, src, msg+2, mtime);
 	default: break;
 	}
 	return 1;
@@ -120,7 +120,7 @@ static int EEROM_New(struct isiInfo *info, const uint8_t * cfg, size_t lcfg)
 	rvrom->sz = rqs >> 1;
 	if(fname) {
 		if(!info->nvstate) {
-			info->nvstate = malloc(info->nvsize = rqs);
+			info->nvstate = isi_alloc(info->nvsize = rqs);
 		} else {
 			if(rqs > info->nvsize) rqs = info->nvsize;
 		}

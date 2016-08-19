@@ -21,6 +21,63 @@ static int session_handle_rd(struct isiSession *ses, struct timespec mtime);
 static int session_handle_async(struct isiSession *ses, struct sescommandset *cmd, int result);
 static int session_handle_keepalive(struct isiSession *ses, struct timespec mtime);
 
+struct cemei_svstate {
+	uint32_t sessionid;
+	uint32_t index;
+	struct isiSession *ses;
+};
+ISIREFLECT(struct cemei_svstate,
+	ISIR(cemei_svstate, uint32_t, sessionid)
+	ISIR(cemei_svstate, uint32_t, index)
+)
+static int cemei_msgin(struct isiInfo *info, struct isiInfo *src, int32_t lsindex, uint16_t *msg, int len, struct timespec mtime)
+{
+	struct cemei_svstate *dev = (struct cemei_svstate*)info->svstate;
+	struct isiSession *ses = dev->ses;
+	if(!dev->sessionid || !ses || ses->id.objtype != ISIT_SESSION || ses->id.id != dev->sessionid) return ISIERR_FAIL;
+	if(lsindex < 0) return 0;
+	uint32_t *pr = (uint32_t*)ses->out;
+	memcpy(pr+2, msg, len * 2);
+	pr[0] = ISIMSG(MSGCHAN, 0, 4 + (len * 2));
+	pr[1] = (uint32_t)lsindex;
+	session_write_msg(ses);
+	return 0;
+}
+
+static int cemei_queryattach(struct isiInfo *to, int32_t topoint, struct isiInfo *dev, int32_t frompoint)
+{
+	if(topoint == ISIAT_UP) return ISIERR_NOCOMPAT;
+	return 0;
+}
+
+static struct isiInfoCalls CEMEI_Calls = {
+	.QueryAttach = cemei_queryattach,
+	.MsgIn = cemei_msgin,
+};
+static int cemei_init(struct isiInfo *info)
+{
+	info->c = &CEMEI_Calls;
+	return 0;
+}
+static int cemei_new(struct isiInfo *info, const uint8_t *cfg, size_t lcfg)
+{
+	return 0;
+}
+
+static uint32_t cemei_meta[] = {0,0,0,0};
+static struct isiConstruct CEMEI_Con = {
+	.objtype = ISIT_CEMEI,
+	.name = "CEMEI",
+	.desc = "Message Exchange Interface",
+	.Init = cemei_init,
+	.New = cemei_new,
+	.rvproto = NULL,
+	.svproto = &ISIREFNAME(struct cemei_svstate),
+	.meta = &cemei_meta
+};
+void cemei_register() {
+	isi_register(&CEMEI_Con);
+}
 int makeserver(int portnumber)
 {
 	int fdsvr, i;
@@ -59,13 +116,52 @@ int makeserver(int portnumber)
 	return 0;
 }
 
+int isi_message_ses(struct isiSessionRef *sr, uint32_t oid, uint16_t *msg, int len)
+{
+	if(!sr->id) {
+		isilog(L_DEBUG, "msg-ses: session not set\n");
+		return -1;
+	}
+	struct isiSession *s = NULL;
+	if(sr->index >= allses.count || 0 == (s = allses.table[sr->index]) || sr->id != s->id.id) {
+		int nindex = -1;
+		/* index is bad, try and find it again */
+		for(int i = 0; i < allses.count; i++) {
+			if(0 != (s = allses.table[i])) {
+				if(s->id.id == sr->id) {
+					nindex = i;
+					break;
+				}
+			}
+		}
+		if(nindex == -1) {
+			/* if not found, the session went away */
+			sr->id = 0;
+			sr->index = 0;
+			isilog(L_INFO, "msg-ses: Session find failed\n");
+			return -1;
+		}
+	}
+	if(!s || s->id.objtype != ISIT_SESSION) {
+		isilog(L_WARN, "msg-ses: Session type invalid\n");
+		return -1; /* just in case */
+	}
+	uint32_t *pr = (uint32_t*)s->out;
+	if((len * 2) > (1300 - 4)) len = (1300 - 4) / 2;
+	pr[0] = ISIMSG(MSGOBJ, 0, 4 + (len * 2));
+	pr[1] = oid;
+	memcpy(pr+2, msg, len * 2);
+	session_write_msg(s);
+	return 0;
+}
+
 void isi_init_sestable()
 {
 	struct isiSessionTable *t = &allses;
 	t->limit = 32;
 	t->count = 0;
 	t->pcount = 0;
-	t->table = (struct isiSession**)malloc(t->limit * sizeof(void*));
+	t->table = (struct isiSession**)isi_alloc(t->limit * sizeof(void*));
 	t->ptable = 0;
 }
 
@@ -75,7 +171,7 @@ int isi_pushses(struct isiSession *s)
 	struct isiSessionTable *t = &allses;
 	void *n;
 	if(t->count >= t->limit) {
-		n = realloc(t->table, (t->limit + t->limit) * sizeof(void*));
+		n = isi_realloc(t->table, (t->limit + t->limit) * sizeof(void*));
 		if(!n) return -5;
 		t->limit += t->limit;
 		t->table = (struct isiSession**)n;
@@ -110,6 +206,11 @@ int isi_delete_ses(struct isiSession *s)
 		i++;
 	}
 	if(s->in || s->out) shutdown(s->sfd, SHUT_RDWR); /* shutdown on buffered streams */
+	if(s->ccmei && s->ccmei->id.objtype == ISIT_CEMEI && s->ccmei->svstate) {
+		struct cemei_svstate *dev = (struct cemei_svstate*)s->ccmei->svstate;
+		dev->ses = NULL;
+		dev->sessionid = 0;
+	}
 	close(s->sfd);
 	free(s->in);
 	free(s->out);
@@ -146,8 +247,8 @@ static int server_handle_new(struct isiSession *hses, struct timespec mtime)
 	if((i= isi_create_object(ISIT_SESSION, (struct objtype **)&ses))) {
 		return i;
 	}
-	ses->in = (uint8_t*)malloc(8192);
-	ses->out = (uint8_t*)malloc(2048);
+	ses->in = (uint8_t*)isi_alloc(8192);
+	ses->out = (uint8_t*)isi_alloc(2048);
 	ses->sfd = fdn;
 	memcpy(&ses->r_addr, &ripn, sizeof(struct sockaddr_in));
 	if(ripn.sin_family == AF_INET) {
@@ -412,8 +513,8 @@ readagain:
 			if(obj && obj->objtype >= 0x2f00) {
 				info = (struct isiInfo*)obj;
 				pr[1+ec] = obj->id;
-				pr[2+ec] = info->dndev ? info->dndev->id.id : 0;
-				pr[3+ec] = info->updev ? info->updev->id.id : 0;
+				pr[2+ec] = 0; /* deprecated ("down" device) */
+				pr[3+ec] = info->updev.t ? info->updev.t->id.id : 0;
 				pr[4+ec] = info->mem ? ((struct objtype*)info->mem)->id : 0;
 				ec+=4;
 			}
@@ -444,11 +545,15 @@ readagain:
 		break;
 	case ISIM_DELOBJ:
 		if(l < 4) break;
+		isilog(L_WARN, "net-session: unimplemented: delete object\n");
 		break;
 	case ISIM_ATTACH:
 		if(l < 8) break;
-		pr[0] = ISIMSG(R_ATTACH, 0, 8);
+		pr[0] = ISIMSG(R_ATTACH, 0, 20);
 		pr[1] = pm[1];
+		pr[3] = pm[2];
+		pr[4] = (uint32_t)ISIAT_APPEND;
+		pr[5] = (uint32_t)ISIAT_UP;
 		{
 			struct objtype *a;
 			struct objtype *b;
@@ -457,7 +562,7 @@ readagain:
 			} else if(a->objtype < 0x2f00){
 				pr[2] = (uint32_t)ISIERR_INVALIDPARAM;
 			} else {
-				pr[2] = (uint32_t)isi_attach((struct isiInfo*)a, (struct isiInfo*)b);
+				pr[2] = (uint32_t)isi_attach((struct isiInfo*)a, ISIAT_APPEND, (struct isiInfo*)b, ISIAT_UP, (int32_t*)(pr+4), (int32_t*)(pr+5));
 			}
 		}
 		session_write_msg(ses);
@@ -466,7 +571,15 @@ readagain:
 		if(l < 8) break;
 		pr[0] = ISIMSG(R_ATTACH, 0, 8);
 		pr[1] = pm[1];
-		pr[2] = (uint32_t)ISIERR_FAIL;
+		pr[2] = (uint32_t)ISIERR_NOTSUPPORTED;
+		{
+			struct objtype *a;
+			if(isi_find_obj(pm[1], &a)) {
+				pr[2] = (uint32_t)ISIERR_NOTFOUND;
+			} else {
+				pr[2] = (uint32_t)isi_deattach((struct isiInfo*)a, (int32_t)pm[2]);
+			}
+		}
 		session_write_msg(ses);
 		break;
 	case ISIM_START:
@@ -481,11 +594,15 @@ readagain:
 			if(isi_find_obj(pm[1], (struct objtype**)&a)) {
 				pr[2] = (uint32_t)ISIERR_NOTFOUND;
 			} else if(a->id.objtype >= 0x3000 && a->id.objtype < 0x3fff) {
-				isi_push_dev(&allcpu, a);
-				if(a->c->Reset) a->c->Reset(a);
-				fetchtime(&a->nrun);
-				isilog(L_INFO, "net-session: enabling CPU\n");
-				pr[2] = 0;
+				if(a->c->RunCycles) pr[2] = 0;
+				if(a->c->Reset) {
+					pr[2] = (uint32_t)a->c->Reset(a);
+				}
+				if(!pr[2]) {
+					isi_push_dev(&allcpu, a);
+					fetchtime(&a->nrun);
+					isilog(L_INFO, "net-session: enabling CPU\n");
+				}
 			} else {
 				pr[2] = (uint32_t)ISIERR_INVALIDPARAM;
 			}
@@ -506,10 +623,37 @@ readagain:
 		break;
 	case ISIM_ATTACHAT:
 		if(l < 16) break;
-		pr[0] = ISIMSG(R_ATTACH, 0, 8);
+		pr[0] = ISIMSG(R_ATTACH, 0, 20);
 		pr[1] = pm[1];
-		pr[2] = (uint32_t)ISIERR_FAIL;
+		pr[3] = pm[2];
+		pr[4] = pm[3];
+		pr[5] = pm[4];
+		{
+			struct objtype *a;
+			struct objtype *b;
+			if(isi_find_obj(pm[1], &a) || isi_find_obj(pm[2], &b)) {
+				pr[2] = (uint32_t)ISIERR_NOTFOUND;
+			} else {
+				pr[2] = (uint32_t)isi_attach((struct isiInfo*)a, (int32_t)pm[3], (struct isiInfo*)b, (int32_t)pm[4], (int32_t*)(pr+4), (int32_t*)(pr+5));
+			}
+		}
 		session_write_msg(ses);
+		break;
+	case ISIM_TNEWOBJ:
+		if(l < 8) break;
+		pr[0] = ISIMSG(R_TNEWOBJ, 0, 16);
+		pr[1] = pm[1];
+		pr[2] = 0;
+		pr[3] = pm[2];
+		{
+			struct objtype *a;
+			a = 0;
+			pr[4] = (uint32_t)isi_make_object(pm[2], &a, ses->in+12, l - 8);
+			if(a) {
+				pr[2] = a->id;
+			}
+		}
+		session_write_msg(ses); /* TODO multisession */
 		break;
 	case ISIM_TLOADOBJ:
 		if(l < 16) break;
@@ -531,10 +675,42 @@ readagain:
 			isilog(L_INFO, "net-msg: [%08x]: not found [%08x]\n", ses->id.id, pm[1]);
 			break;
 		}
-		if(info->id.objtype >= 0x2000) {
-			if(info->c->MsgIn) {
-				info->c->MsgIn(info, info->updev, (uint16_t*)(pm+2), 10, mtime);
+		if(((uint16_t*)(pm+2))[0] == ISE_SUBSCRIBE) {
+			if(info->id.objtype == ISIT_CEMEI) {
+				struct cemei_svstate *cem = (struct cemei_svstate*)info->svstate;
+				if(cem->sessionid && cem->ses) {
+					if(cem->ses->id.objtype == ISIT_SESSION && cem->ses->id.id == cem->sessionid) {
+						cem->ses->ccmei = NULL;
+						cem->ses = NULL;
+						cem->sessionid = 0;
+					}
+				}
+				cem->ses = ses;
+				cem->sessionid = ses->id.id;
+				ses->ccmei = info;
+			} else if(info->id.objtype >= 0x2f00) {
+				isilog(L_INFO, "net-session: [%08x]: EMEI subscribe\n", ses->id.id);
+				info->sesref.id = ses->id.id;
+				info->sesref.index = 0;
 			}
+		} else if(info->id.objtype >= 0x2f00) {
+			isi_message_dev(info, -1, (uint16_t*)(pm+2), 10, mtime);
+		}
+	}
+		break;
+	case ISIM_MSGCHAN:
+		if(l < 6) break;
+	{
+		int32_t chan;
+		chan = (int32_t)pm[1];
+		if(chan < 0) {
+			isilog(L_INFO, "net-msg: bad channel (%d)\n", chan);
+			break;
+		}
+		if(ses->ccmei) {
+			isi_message_dev(ses->ccmei, chan, (uint16_t*)(pm+2), (l - 4) / 2, mtime);
+		} else {
+			isilog(L_INFO, "net-session: [%08x]: no CEMEI subscribed\n", ses->id.id);
 		}
 	}
 		break;
