@@ -18,6 +18,7 @@ void imva_Register();
 void speaker_Register();
 void GCA_Register();
 void KaiHIC_Register();
+void HICProxy_Register();
 
 void isi_register_objects()
 {
@@ -35,5 +36,6 @@ void isi_register_objects()
 	speaker_Register();
 	GCA_Register();
 	KaiHIC_Register();
+	HICProxy_Register();
 }
 
