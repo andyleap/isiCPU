@@ -238,8 +238,17 @@ static int server_handle_new(struct isiSession *hses, struct timespec mtime)
 		close(fdn);
 		return -1;
 	}
-	if( fcntl(fdn, F_SETFL, O_NONBLOCK) < 0) {
-		isilogerr("fcntl");
+//Cannot use nonblock, as that screws up if the send buffer fills, and there's no code in place to deal with it.  Easier solution is to kill nonblocking
+//	if( fcntl(fdn, F_SETFL, O_NONBLOCK) < 0) {
+//		isilogerr("fcntl");
+//		close(fdn);
+//		return -1;
+//	}
+	struct timeval tv;
+	tv.tv_sec = 0;
+	tv.tv_usec = 0;
+	if(setsockopt(fdn, SOL_SOCKET, SO_RCVTIMEO, (void*)&tv, sizeof(tv))){
+		isilogerr("settimeout");
 		close(fdn);
 		return -1;
 	}
